@@ -4,11 +4,22 @@ const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 const TAVILY_API_KEY = process.env.TAVILY_API_KEY;
 const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || "openrouter/auto";
 
+type ScoutMode = "analyze" | "ideas" | "submission" | "search";
+type SourceType = "pasted brief" | "live url" | "live search";
+
 type RequestBody = {
   brief?: string;
-  mode?: "strategy" | "build" | "risks";
+  mode?: ScoutMode;
   searchQuery?: string;
 };
+
+const scoutModes = new Set<ScoutMode>(["analyze", "ideas", "submission", "search"]);
+
+function normalizeMode(mode: unknown): ScoutMode {
+  return typeof mode === "string" && scoutModes.has(mode as ScoutMode)
+    ? (mode as ScoutMode)
+    : "analyze";
+}
 
 function isLikelyUrl(value: string) {
   try {
@@ -39,6 +50,18 @@ function stripHtml(html: string) {
 }
 
 async function fetchUrlText(url: string) {
+  // Try Jina Reader first: free, no key, handles JS-rendered pages.
+  try {
+    const jina = await fetch(`https://r.jina.ai/${url}`, {
+      headers: { "User-Agent": "ScoutOpportunityAgent/1.0" },
+    });
+    if (jina.ok) {
+      const text = (await jina.text()).trim();
+      if (text.length > 200) return text.slice(0, 12000);
+    }
+  } catch {}
+
+  // Fallback to direct fetch + stripHtml.
   const response = await fetch(url, {
     headers: {
       "User-Agent": "ScoutOpportunityAgent/1.0",
@@ -47,7 +70,9 @@ async function fetchUrlText(url: string) {
   });
 
   if (!response.ok) {
-    throw new Error(`failed to fetch url: ${response.status}`);
+    throw new Error(
+      `Could not fetch that URL. The page returned HTTP ${response.status}.`
+    );
   }
 
   const html = await response.text();
@@ -56,7 +81,9 @@ async function fetchUrlText(url: string) {
 
 async function tavilySearch(query: string) {
   if (!TAVILY_API_KEY) {
-    throw new Error("missing TAVILY_API_KEY");
+    throw new Error(
+      "Search is not configured. Add TAVILY_API_KEY to .env.local."
+    );
   }
 
   const response = await fetch("https://api.tavily.com/search", {
@@ -75,8 +102,9 @@ async function tavilySearch(query: string) {
   });
 
   if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`tavily search failed: ${errorText}`);
+    throw new Error(
+      "Search failed. Check the Tavily key or try a narrower query."
+    );
   }
 
   const data = await response.json();
@@ -84,94 +112,179 @@ async function tavilySearch(query: string) {
   const results = Array.isArray(data.results)
     ? data.results
         .map(
-          (item: { title?: string; url?: string; content?: string }, index: number) =>
-            `${index + 1}. ${item.title || "untitled"}\nurl: ${item.url || "n/a"}\nsummary: ${
-              item.content || "no summary"
+          (
+            item: { title?: string; url?: string; content?: string },
+            index: number
+          ) =>
+            `${index + 1}. ${item.title || "Untitled"}\nURL: ${item.url || "n/a"}\nSummary: ${
+              item.content || "No summary"
             }`
         )
         .join("\n\n")
     : "";
 
-  return [data.answer ? `search answer: ${data.answer}` : "", results].filter(Boolean).join("\n\n");
+  return [data.answer ? `Search answer: ${data.answer}` : "", results]
+    .filter(Boolean)
+    .join("\n\n");
 }
 
-function buildModeInstruction(mode: RequestBody["mode"]) {
-  if (mode === "build") {
-    return "focus on concrete product concepts, mvp scope, core features, technical architecture, and what to build first.";
+function buildModeInstruction(mode: ScoutMode) {
+  if (mode === "ideas") {
+    return "Generate differentiated project ideas that fit the sponsor, prize incentives, judging criteria, and technical constraints. Rank ideas by likely submission strength and buildability.";
   }
 
-  if (mode === "risks") {
-    return "focus on feasibility risks, weak assumptions, missing data, judging gaps, technical blockers, and mitigation steps.";
+  if (mode === "submission") {
+    return "Focus on final submission strategy: pitch, demo flow, README, screenshots, judging narrative, risk reduction, and the exact polish needed before deadline.";
   }
 
-  return "focus on strategic fit, prize alignment, judging criteria, strongest positioning, and the best submission angle.";
+  if (mode === "search") {
+    return "Evaluate the search results as builder opportunities. Rank the best opportunities, explain fit, identify deadlines or missing data when present, and recommend where to focus first.";
+  }
+
+  return "Focus on strategic fit, prize alignment, judging criteria, strongest positioning, recommended MVP, risks, and the best submission angle.";
 }
 
-async function askOpenRouter(content: string, mode: RequestBody["mode"], sourceType: string) {
+function buildReportFormat(mode: ScoutMode) {
+  if (mode === "ideas") {
+    return `Return a Scout ideas report with:
+1. Executive recommendation
+2. Top project concepts ranked
+3. Strongest concept and why
+4. MVP scope
+5. Technical architecture
+6. Differentiation and judging angle
+7. Build risks and next steps`;
+  }
+
+  if (mode === "submission") {
+    return `Return a Scout submission plan with:
+1. Submission verdict
+2. Strongest pitch angle
+3. Demo narrative
+4. README and documentation checklist
+5. Product polish checklist
+6. Judging risks and fixes
+7. Final 24-hour action plan`;
+  }
+
+  if (mode === "search") {
+    return `Return a Scout opportunity search report with:
+1. Best opportunity to pursue
+2. Ranked opportunities
+3. Why each opportunity fits or does not fit
+4. Likely build angles
+5. Required follow-up research
+6. Risks and constraints
+7. Recommended next move`;
+  }
+
+  return `Return a Scout report with:
+1. Executive verdict
+2. What the opportunity is really rewarding
+3. Strongest project angle
+4. Recommended MVP
+5. Technical build plan
+6. Risks and mitigations
+7. Submission checklist`;
+}
+
+async function askOpenRouter(
+  content: string,
+  mode: ScoutMode,
+  sourceType: SourceType
+) {
   if (!OPENROUTER_API_KEY) {
-    throw new Error("missing OPENROUTER_API_KEY");
+    throw new Error(
+      "Analysis is not configured. Add OPENROUTER_API_KEY to .env.local."
+    );
   }
 
-  const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${OPENROUTER_API_KEY}`,
-      "Content-Type": "application/json",
-      "HTTP-Referer": "https://scout.local",
-      "X-Title": "Scout",
-    },
-    body: JSON.stringify({
-      model: OPENROUTER_MODEL,
-      messages: [
-        {
-          role: "system",
-          content:
-            "you are scout, an opportunity strategy agent for builders. you analyse hackathons, grants, bounties, and market opportunities. be specific, practical, and submission-oriented. do not pretend to browse beyond the provided content/search results. if information is missing, state assumptions clearly. always produce markdown.",
-        },
-        {
-          role: "user",
-          content: `source type: ${sourceType}
+  const response = await fetch(
+    "https://openrouter.ai/api/v1/chat/completions",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://scout.local",
+        "X-Title": "Scout",
+      },
+      body: JSON.stringify({
+        model: OPENROUTER_MODEL,
+        messages: [
+          {
+            role: "system",
+            content: `You are Scout, an opportunity strategy analyst for hackathons, grants, bounties, and builder competitions.
 
-mode instruction: ${buildModeInstruction(mode)}
+Important constraint: you do not assume you can browse the web or fetch live pages unless the runtime explicitly provides those tools. Your primary job is to analyze the opportunity details the user provides.
 
-analyse this opportunity content:
+Your job is to help a builder decide whether an opportunity is worth entering, what angle gives them the best chance of winning, and what they should build or submit.
+
+Style rules:
+- Be direct and practical
+- Do not be generic
+- Do not overhype weak ideas
+- Prefer concrete product strategy over vague inspiration
+- Explain tradeoffs clearly
+- Use simple language
+- Optimize for winning, shipping, and judge clarity
+- Always produce clean markdown
+
+If the user gives incomplete information, make reasonable assumptions, state them briefly, and continue.`,
+          },
+          {
+            role: "user",
+            content: `Source type: ${sourceType}
+
+Mode instruction: ${buildModeInstruction(mode)}
+
+Analyze this opportunity content:
 
 ${content}
 
-return a scout report with:
-1. executive verdict
-2. what the opportunity is really rewarding
-3. strongest project angle
-4. recommended mvp
-5. technical build plan
-6. risks and mitigations
-7. submission checklist`,
-        },
-      ],
-      temperature: 0.35,
-    }),
-  });
+${buildReportFormat(mode)}`,
+          },
+        ],
+        temperature: 0.35,
+      }),
+    }
+  );
 
   if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`openrouter failed: ${errorText}`);
+    throw new Error(
+      "Scout could not generate a report. Check the OpenRouter key or selected model."
+    );
   }
 
   const data = await response.json();
-  return data?.choices?.[0]?.message?.content || "no report returned.";
+  return data?.choices?.[0]?.message?.content || "No report returned.";
 }
 
 export async function POST(request: Request) {
   try {
     const body = (await request.json()) as RequestBody;
     const brief = body.brief?.trim() || "";
-    const searchQuery = body.searchQuery?.trim() || "";
-    const mode = body.mode || "strategy";
+    const mode = normalizeMode(body.mode);
+    const searchQuery = (
+      body.searchQuery ||
+      (mode === "search" ? brief : "")
+    ).trim();
 
     let content = "";
-    let sourceType = "brief";
+    let sourceType: SourceType = "pasted brief";
 
-    if (searchQuery) {
+    if (mode === "search") {
+      if (!searchQuery) {
+        return NextResponse.json(
+          {
+            error: "missing input",
+            details:
+              "Enter a search query before asking Scout to find opportunities.",
+          },
+          { status: 400 }
+        );
+      }
+
       content = await tavilySearch(searchQuery);
       sourceType = "live search";
     } else if (brief && isLikelyUrl(brief)) {
@@ -184,7 +297,10 @@ export async function POST(request: Request) {
 
     if (!content) {
       return NextResponse.json(
-        { error: "missing input", details: "paste a brief, url, or search query." },
+        {
+          error: "missing input",
+          details: "Paste a brief, URL, or search query.",
+        },
         { status: 400 }
       );
     }
@@ -194,6 +310,7 @@ export async function POST(request: Request) {
     return NextResponse.json({
       report,
       sourceType,
+      mode,
     });
   } catch (error) {
     console.error("Failed to handle /api/analyze", error);
@@ -201,7 +318,8 @@ export async function POST(request: Request) {
     return NextResponse.json(
       {
         error: "request failed",
-        details: error instanceof Error ? error.message : "unknown error",
+        details:
+          error instanceof Error ? error.message : "Unknown error.",
       },
       { status: 500 }
     );

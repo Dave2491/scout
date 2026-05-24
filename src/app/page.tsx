@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useState } from "react";
 import ReactMarkdown from "react-markdown";
 
@@ -27,11 +28,12 @@ const modes = [
 ] as const;
 
 type ScoutMode = (typeof modes)[number]["id"];
+type SourceType = "pasted brief" | "live url" | "live search" | "";
 
 const analysisCards = [
   {
     title: "opportunity fit",
-    description: "Quickly checks whether the brief matches Scout’s intended use case.",
+    description: "Quickly checks whether the brief matches Scout's intended use case.",
   },
   {
     title: "best angle",
@@ -47,6 +49,20 @@ const analysisCards = [
   },
 ];
 
+function getSourceLabel(sourceType: SourceType) {
+  if (sourceType === "live url") return "live url fetched";
+  if (sourceType === "live search") return "web search";
+  if (sourceType === "pasted brief") return "pasted brief";
+  return "";
+}
+
+function getActionLabel(mode: ScoutMode) {
+  if (mode === "search") return "Search with Scout";
+  if (mode === "ideas") return "Generate Project Ideas";
+  if (mode === "submission") return "Build Submission Plan";
+  return "Generate Scout Report";
+}
+
 export default function Home() {
   const [brief, setBrief] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
@@ -54,9 +70,10 @@ export default function Home() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [mode, setMode] = useState<ScoutMode>("analyze");
-  const [sourceType, setSourceType] = useState("");
+  const [sourceType, setSourceType] = useState<SourceType>("");
 
   const activeInput = mode === "search" ? searchQuery : brief;
+  const sourceLabel = getSourceLabel(sourceType);
 
   async function handleAnalyze() {
     setLoading(true);
@@ -65,28 +82,30 @@ export default function Home() {
     setSourceType("");
 
     try {
+      const payload =
+        mode === "search"
+          ? { mode, searchQuery: searchQuery.trim() }
+          : { mode, brief: brief.trim() };
+
       const response = await fetch("/api/analyze", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          brief: activeInput,
-          mode,
-        }),
+        body: JSON.stringify(payload),
       });
 
       const raw = await response.text();
       const data = raw ? JSON.parse(raw) : {};
 
       if (!response.ok) {
-        throw new Error(data?.details || data?.error || "request failed");
+        throw new Error(data?.details || data?.error || "Request failed.");
       }
 
-      setReport(data.report || "no report returned.");
+      setReport(data.report || "No report returned.");
       setSourceType(data.sourceType || "");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "unknown error");
+      setError(err instanceof Error ? err.message : "Unknown error.");
     } finally {
       setLoading(false);
     }
@@ -103,9 +122,11 @@ export default function Home() {
               </p>
 
               <div className="inline-flex items-center gap-3 rounded-full border border-red-500/25 bg-black/50 px-4 py-2 text-xs font-semibold uppercase tracking-[0.25em] text-red-100 shadow-[0_0_30px_rgba(239,68,68,0.18)]">
-                <img
+                <Image
                   src="/swarms-logo.svg"
                   alt="swarms"
+                  width={20}
+                  height={20}
                   className="h-5 w-5 rounded-full object-contain"
                 />
                 <span>built for swarms acm hackathon</span>
@@ -117,7 +138,7 @@ export default function Home() {
             </h1>
 
             <p className="mt-4 max-w-2xl text-sm leading-6 text-zinc-300">
-              Scout analyses hackathon briefs, grants, and bounties, then turns
+              Scout analyzes hackathon briefs, grants, and bounties, then turns
               them into a specific action plan with a strong winning angle.
             </p>
           </div>
@@ -152,7 +173,7 @@ export default function Home() {
             {mode === "search" ? (
               <div className="space-y-3 pt-2">
                 <label className="block text-sm font-medium text-red-100">
-                  search for opportunities
+                  Search for opportunities
                 </label>
 
                 <input
@@ -163,7 +184,7 @@ export default function Home() {
                 />
 
                 <p className="text-xs leading-5 text-zinc-500">
-                  Scout will search the web, summarise relevant opportunities,
+                  Scout will search the web, summarize relevant opportunities,
                   and recommend where to focus.
                 </p>
               </div>
@@ -176,13 +197,13 @@ export default function Home() {
                 <textarea
                   value={brief}
                   onChange={(e) => setBrief(e.target.value)}
-                  placeholder="Paste a hackathon brief, grant description, bounty prompt, or url here..."
+                  placeholder="Paste a hackathon brief, grant description, bounty prompt, or URL here..."
                   className="min-h-56 w-full rounded-2xl border border-red-950/80 bg-black/40 px-4 py-3 text-sm text-white outline-none placeholder:text-zinc-500 focus:border-red-500/70"
                 />
 
                 <p className="text-xs leading-5 text-zinc-500">
-                  You can paste a full brief or a live url. Scout will fetch the
-                  page when a url is provided.
+                  You can paste a full brief or a live URL. Scout will fetch the
+                  page when a URL is provided.
                 </p>
               </div>
             )}
@@ -192,11 +213,7 @@ export default function Home() {
               disabled={loading || !activeInput.trim()}
               className="rounded-full bg-red-500 px-5 py-3 text-sm font-semibold text-black transition hover:bg-red-400 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {loading
-                ? "Analyzing..."
-                : mode === "search"
-                  ? "Search with Scout"
-                  : "Generate Scout Report"}
+              {loading ? "Analyzing..." : getActionLabel(mode)}
             </button>
           </div>
 
@@ -231,16 +248,11 @@ export default function Home() {
               </pre>
             ) : report ? (
               <div className="space-y-6 text-zinc-200 [&_h1]:mb-5 [&_h1]:text-2xl [&_h1]:font-semibold [&_h1]:text-red-100 [&_h2]:mb-4 [&_h2]:mt-8 [&_h2]:text-xl [&_h2]:font-semibold [&_h2]:text-red-100 [&_h3]:mb-3 [&_h3]:mt-6 [&_h3]:text-lg [&_h3]:font-semibold [&_h3]:text-white [&_li]:my-2 [&_li]:leading-7 [&_ol]:my-5 [&_p]:my-4 [&_p]:leading-7 [&_strong]:text-white [&_ul]:my-5">
-                {sourceType && (
+                {sourceLabel ? (
                   <p className="inline-flex rounded-full border border-red-500/20 bg-red-500/10 px-3 py-1 text-xs text-red-200">
-                    source:{" "}
-                    {sourceType === "url"
-                      ? "live url fetched"
-                      : sourceType === "search"
-                        ? "web search"
-                        : "pasted brief"}
+                    source: {sourceLabel}
                   </p>
-                )}
+                ) : null}
 
                 <ReactMarkdown>{report}</ReactMarkdown>
               </div>
