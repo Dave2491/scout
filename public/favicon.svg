@@ -1,0 +1,23 @@
+<svg width="500" height="500" viewBox="0 0 500 500" xmlns="http://www.w3.org/2000/svg">
+<title>Scout logo</title>
+<rect width="500" height="500" fill="#0a0101"/>
+<circle cx="250" cy="250" r="230" fill="none" stroke="#c0392b" stroke-width="2" stroke-opacity="0.6"/>
+<circle cx="250" cy="250" r="180" fill="none" stroke="#2d0808" stroke-width="1"/>
+<circle cx="250" cy="250" r="130" fill="none" stroke="#3d0a0a" stroke-width="1"/>
+<circle cx="250" cy="250" r="80" fill="none" stroke="#2d0808" stroke-width="1"/>
+<line x1="250" y1="20" x2="250" y2="480" stroke="#1e0505" stroke-width="0.6"/>
+<line x1="20" y1="250" x2="480" y2="250" stroke="#1e0505" stroke-width="0.6"/>
+<path d="M250 250 L250 20 A230 230 0 0 1 448 340 Z" fill="#c0392b" fill-opacity="0.06"/>
+<path d="M250 250 L250 20 A230 230 0 0 1 448 340" fill="none" stroke="#c0392b" stroke-width="1.2" stroke-opacity="0.5"/>
+<circle cx="370" cy="160" r="5" fill="#e74c3c"/>
+<circle cx="370" cy="160" r="13" fill="none" stroke="#e74c3c" stroke-width="0.8" stroke-opacity="0.4"/>
+<circle cx="340" cy="340" r="3" fill="#e74c3c" fill-opacity="0.6"/>
+<circle cx="400" cy="260" r="2.5" fill="#e74c3c" fill-opacity="0.5"/>
+<circle cx="250" cy="250" r="5" fill="#e74c3c"/>
+<circle cx="250" cy="250" r="13" fill="none" stroke="#e74c3c" stroke-width="0.8" stroke-opacity="0.4"/>
+<text x="250" y="320" text-anchor="middle" font-family="Georgia, serif" font-size="180" font-weight="700" fill="#ffffff" fill-opacity="0.93">S</text>
+<path d="M40 40 L40 80 M40 40 L80 40" stroke="#e74c3c" stroke-width="2" stroke-opacity="0.6" fill="none"/>
+<path d="M460 40 L460 80 M460 40 L420 40" stroke="#e74c3c" stroke-width="2" stroke-opacity="0.6" fill="none"/>
+<path d="M40 460 L40 420 M40 460 L80 460" stroke="#e74c3c" stroke-width="2" stroke-opacity="0.6" fill="none"/>
+<path d="M460 460 L460 420 M460 460 L420 460" stroke="#e74c3c" stroke-width="2" stroke-opacity="0.6" fill="none"/>
+</svg>
