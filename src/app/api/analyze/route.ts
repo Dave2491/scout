@@ -1,16 +1,16 @@
 import { NextResponse } from "next/server";
-import { Readability } from "@mozilla/readability";
-import { JSDOM } from "jsdom";
 
-const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
-const TAVILY_URL = "https://api.tavily.com/search";
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
+const TAVILY_API_KEY = process.env.TAVILY_API_KEY;
+const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || "openrouter/auto";
 
-type AnalyzeBody = {
+type RequestBody = {
   brief?: string;
-  mode?: "analyze" | "ideas" | "submission" | "search";
+  mode?: "strategy" | "build" | "risks";
+  searchQuery?: string;
 };
 
-function isUrl(value: string) {
+function isLikelyUrl(value: string) {
   try {
     const url = new URL(value);
     return url.protocol === "http:" || url.protocol === "https:";
@@ -19,229 +19,191 @@ function isUrl(value: string) {
   }
 }
 
-async function fetchPageText(url: string) {
-  const response = await fetch(url, {
-    headers: {
-      "User-Agent": "ScoutOpportunityAgent/1.0",
-    },
-  });
-
-  if (!response.ok) {
-    throw new Error(`could not fetch url: ${response.status}`);
-  }
-
-  const html = await response.text();
-  const dom = new JSDOM(html, { url });
-  const article = new Readability(dom.window.document).parse();
-
-  return [
-    article?.title ? `title: ${article.title}` : "",
-    article?.excerpt ? `excerpt: ${article.excerpt}` : "",
-    article?.textContent || dom.window.document.body.textContent || "",
-  ]
-    .join("\n\n")
+function stripHtml(html: string) {
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<nav[\s\S]*?<\/nav>/gi, " ")
+    .replace(/<footer[\s\S]*?<\/footer>/gi, " ")
+    .replace(/<header[\s\S]*?<\/header>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
     .replace(/\s+/g, " ")
+    .trim()
     .slice(0, 12000);
 }
 
-async function searchOpportunities(query: string) {
-  const apiKey = process.env.TAVILY_API_KEY;
+async function fetchUrlText(url: string) {
+  const response = await fetch(url, {
+    headers: {
+      "User-Agent": "ScoutOpportunityAgent/1.0",
+      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    },
+  });
 
-  if (!apiKey) {
-    throw new Error("missing TAVILY_API_KEY in .env.local");
+  if (!response.ok) {
+    throw new Error(`failed to fetch url: ${response.status}`);
   }
 
-  const response = await fetch(TAVILY_URL, {
+  const html = await response.text();
+  return stripHtml(html);
+}
+
+async function tavilySearch(query: string) {
+  if (!TAVILY_API_KEY) {
+    throw new Error("missing TAVILY_API_KEY");
+  }
+
+  const response = await fetch("https://api.tavily.com/search", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      api_key: apiKey,
+      api_key: TAVILY_API_KEY,
       query,
-      search_depth: "advanced",
-      max_results: 6,
+      search_depth: "basic",
       include_answer: true,
       include_raw_content: false,
+      max_results: 5,
     }),
   });
 
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`tavily search failed: ${errorText}`);
+  }
+
   const data = await response.json();
 
-  if (!response.ok) {
-    throw new Error(data?.error || "tavily search failed");
-  }
+  const results = Array.isArray(data.results)
+    ? data.results
+        .map(
+          (item: { title?: string; url?: string; content?: string }, index: number) =>
+            `${index + 1}. ${item.title || "untitled"}\nurl: ${item.url || "n/a"}\nsummary: ${
+              item.content || "no summary"
+            }`
+        )
+        .join("\n\n")
+    : "";
 
-  const results = Array.isArray(data.results) ? data.results : [];
-
-  return [
-    data.answer ? `search summary:\n${data.answer}` : "",
-    "search results:",
-    ...results.map((item: any, index: number) => {
-      return `${index + 1}. ${item.title || "untitled"}\nurl: ${item.url || "n/a"}\nsummary: ${
-        item.content || "no summary"
-      }`;
-    }),
-  ]
-    .filter(Boolean)
-    .join("\n\n");
+  return [data.answer ? `search answer: ${data.answer}` : "", results].filter(Boolean).join("\n\n");
 }
 
-function getModeInstruction(mode: AnalyzeBody["mode"]) {
-  if (mode === "ideas") {
-    return `
-focus on generating 3 strong project ideas.
-for each idea include:
-- name
-- one-sentence pitch
-- why it fits the brief
-- core features
-- easiest mvp
-- strongest judging angle
-- implementation risk
-`;
+function buildModeInstruction(mode: RequestBody["mode"]) {
+  if (mode === "build") {
+    return "focus on concrete product concepts, mvp scope, core features, technical architecture, and what to build first.";
   }
 
-  if (mode === "submission") {
-    return `
-focus on turning the project into a submission plan.
-include:
-- submission positioning
-- missing requirements
-- final checklist
-- demo/pitch structure
-- what to polish first
-- what not to waste time on
-`;
+  if (mode === "risks") {
+    return "focus on feasibility risks, weak assumptions, missing data, judging gaps, technical blockers, and mitigation steps.";
   }
 
-  if (mode === "search") {
-    return `
-focus on opportunity discovery.
-include:
-- the best relevant opportunities found
-- prize/deadline/sponsor details where available
-- why each opportunity is worth considering
-- what kind of project would fit
-- which opportunity is strongest and why
-`;
-  }
-
-  return `
-focus on analysing the opportunity.
-include:
-- plain-English summary
-- what judges or sponsors likely care about
-- hidden requirements
-- strongest possible build angle
-- risks and traps
-- recommended next steps
-`;
+  return "focus on strategic fit, prize alignment, judging criteria, strongest positioning, and the best submission angle.";
 }
 
-async function generateReport({
-  content,
-  mode,
-  sourceType,
-}: {
-  content: string;
-  mode: AnalyzeBody["mode"];
-  sourceType: string;
-}) {
-  const apiKey = process.env.OPENROUTER_API_KEY;
-
-  if (!apiKey) {
-    throw new Error("missing OPENROUTER_API_KEY in .env.local");
+async function askOpenRouter(content: string, mode: RequestBody["mode"], sourceType: string) {
+  if (!OPENROUTER_API_KEY) {
+    throw new Error("missing OPENROUTER_API_KEY");
   }
 
-  const response = await fetch(OPENROUTER_URL, {
+  const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${apiKey}`,
+      Authorization: `Bearer ${OPENROUTER_API_KEY}`,
       "Content-Type": "application/json",
-      "HTTP-Referer": "http://localhost:3000",
+      "HTTP-Referer": "https://scout.local",
       "X-Title": "Scout",
     },
     body: JSON.stringify({
-      model: process.env.OPENROUTER_MODEL || "openrouter/auto",
+      model: OPENROUTER_MODEL,
       messages: [
         {
           role: "system",
           content:
-            "you are scout, an opportunity strategy agent for hackathons, grants, bounties, and builder competitions. be specific, practical, and direct. do not pretend to know facts not present in the provided material. if information is missing, say so. format the response in clear markdown.",
+            "you are scout, an opportunity strategy agent for builders. you analyse hackathons, grants, bounties, and market opportunities. be specific, practical, and submission-oriented. do not pretend to browse beyond the provided content/search results. if information is missing, state assumptions clearly. always produce markdown.",
         },
         {
           role: "user",
-          content: `
-source type: ${sourceType}
-mode: ${mode || "analyze"}
+          content: `source type: ${sourceType}
 
-${getModeInstruction(mode)}
+mode instruction: ${buildModeInstruction(mode)}
 
-material:
+analyse this opportunity content:
+
 ${content}
-`,
+
+return a scout report with:
+1. executive verdict
+2. what the opportunity is really rewarding
+3. strongest project angle
+4. recommended mvp
+5. technical build plan
+6. risks and mitigations
+7. submission checklist`,
         },
       ],
+      temperature: 0.35,
     }),
   });
 
-  const data = await response.json();
-
   if (!response.ok) {
-    throw new Error(data?.error?.message || "openrouter request failed");
+    const errorText = await response.text();
+    throw new Error(`openrouter failed: ${errorText}`);
   }
 
-  return (
-    data?.choices?.[0]?.message?.content ||
-    data?.choices?.[0]?.text ||
-    "no analysis returned."
-  );
+  const data = await response.json();
+  return data?.choices?.[0]?.message?.content || "no report returned.";
 }
 
 export async function POST(request: Request) {
   try {
-    const body = (await request.json()) as AnalyzeBody;
-    const input = body.brief?.trim() || "";
-    const mode = body.mode || "analyze";
+    const body = (await request.json()) as RequestBody;
+    const brief = body.brief?.trim() || "";
+    const searchQuery = body.searchQuery?.trim() || "";
+    const mode = body.mode || "strategy";
 
-    if (!input) {
+    let content = "";
+    let sourceType = "brief";
+
+    if (searchQuery) {
+      content = await tavilySearch(searchQuery);
+      sourceType = "live search";
+    } else if (brief && isLikelyUrl(brief)) {
+      content = await fetchUrlText(brief);
+      sourceType = "live url";
+    } else {
+      content = brief;
+      sourceType = "pasted brief";
+    }
+
+    if (!content) {
       return NextResponse.json(
-        { error: "please provide a brief, url, or search query." },
-        { status: 400 },
+        { error: "missing input", details: "paste a brief, url, or search query." },
+        { status: 400 }
       );
     }
 
-    let content = input;
-    let sourceType = "pasted brief";
-
-    if (mode === "search") {
-      content = await searchOpportunities(input);
-      sourceType = "live search";
-    } else if (isUrl(input)) {
-      content = await fetchPageText(input);
-      sourceType = "live url fetched";
-    }
-
-    const report = await generateReport({
-      content,
-      mode,
-      sourceType,
-    });
+    const report = await askOpenRouter(content, mode, sourceType);
 
     return NextResponse.json({
       report,
       sourceType,
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "unknown error";
+    console.error("Failed to handle /api/analyze", error);
 
     return NextResponse.json(
       {
         error: "request failed",
-        details: message,
+        details: error instanceof Error ? error.message : "unknown error",
       },
-      { status: 500 },
+      { status: 500 }
     );
   }
 }
